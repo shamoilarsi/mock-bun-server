@@ -21,7 +21,6 @@ type Subscription = {
   ws: any;
 };
 
-// Mock data generators
 function generateMockTransaction(index: number, blockNumber: number) {
   const txHash = `0x${Math.random().toString(16).slice(2).padStart(64, "0")}`;
   const from = `0x${Math.random().toString(16).slice(2).padStart(40, "0")}`;
@@ -119,12 +118,54 @@ type PendingTransaction = {
 };
 const pendingTransactions: PendingTransaction[] = [];
 
+async function processRawTransaction(rawTx: string | undefined, requestId: number | string, source: string) {
+  if (!rawTx || typeof rawTx !== "string" || !rawTx.startsWith("0x")) {
+    return {
+      success: false,
+      error: {
+        code: -32602,
+        message: "Invalid raw transaction parameter",
+      },
+    };
+  }
+  
+  const txIndex = pendingTransactions.length;
+  const mockTx = generateMockTransaction(txIndex, currentBlockNumber);
+  const receipt = generateMockReceipt(mockTx, txIndex, currentBlockNumber);
+  
+  pendingTransactions.push({ rawTx, transaction: mockTx, receipt });
+  
+  console.log(`Transaction queued (${source}): ${receipt.transactionHash} (will appear in next mini block)`);
+  
+  // Simulate transaction processing delay (10-100ms)
+  // Very rarely (1% chance) simulate timeout for testing
+  const shouldTimeout = Math.random() < 0.01;
+  const delay = shouldTimeout ? 10000 : Math.random() * 90 + 10;
+  
+  await new Promise(resolve => setTimeout(resolve, delay));
+  
+  if (shouldTimeout) {
+    console.log(`Transaction timeout (${source}): request ${requestId}`);
+    return {
+      success: false,
+      error: {
+        code: -32000,
+        message: "realtime transaction expired",
+      },
+    };
+  }
+  
+  console.log(`Transaction receipt returned (${source}): ${receipt.transactionHash}`);
+  return {
+    success: true,
+    result: receipt,
+  };
+}
+
 function startMiniBlockGeneration() {
   function generateAndScheduleNext() {
-    // Generate a new mini block
     const miniBlock = generateMiniBlock(currentBlockNumber, miniBlockIndex);
 
-    // Send to all miniBlocks subscribers
     for (const [subId, sub] of subscriptions.entries()) {
       if (sub.type === "miniBlocks") {
         try {
@@ -152,22 +193,19 @@ function startMiniBlockGeneration() {
       miniBlockIndex = 0;
     }
 
-    // Schedule next mini block with new random delay (100-500ms)
     setTimeout(generateAndScheduleNext, Math.random() * 400 + 100);
   }
 
-  // Start the generation loop
   generateAndScheduleNext();
 }
 
-function handleJsonRpcMessage(ws: any, message: JsonRpcRequest) {
+async function handleJsonRpcMessage(ws: any, message: JsonRpcRequest) {
   const response: JsonRpcResponse = {
     jsonrpc: "2.0",
     id: message.id,
   };
 
   try {
-    // Handle eth_subscribe
     if (message.method === "eth_subscribe") {
       const [subscriptionType, ...params] = message.params || [];
 
@@ -187,23 +225,38 @@ function handleJsonRpcMessage(ws: any, message: JsonRpcRequest) {
           message: `Unsupported subscription type: ${subscriptionType}`,
         };
       }
+      
+      ws.send(JSON.stringify(response));
     }
-    // Handle eth_unsubscribe
+
     else if (message.method === "eth_unsubscribe") {
       const [subId] = message.params || [];
       const existed = subscriptions.delete(subId);
       response.result = existed;
       console.log(`Unsubscribed: ${subId}`);
+      
+      ws.send(JSON.stringify(response));
     }
-    // Unsupported method
+    else if (message.method === "realtime_sendRawTransaction") {
+      const [rawTx] = message.params || [];
+      const result = await processRawTransaction(rawTx, message.id, "WebSocket");
+      
+      if (result.success) {
+        response.result = result.result;
+      } else {
+        response.error = result.error;
+      }
+      
+      ws.send(JSON.stringify(response));
+    }
+
     else {
       response.error = {
         code: -32601,
         message: `Method not supported in WebSocket: ${message.method}`,
       };
+      ws.send(JSON.stringify(response));
     }
-
-    ws.send(JSON.stringify(response));
   } catch (error) {
     response.error = {
       code: -32603,
@@ -213,7 +266,6 @@ function handleJsonRpcMessage(ws: any, message: JsonRpcRequest) {
   }
 }
 
-// Helper to add CORS headers
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
@@ -222,16 +274,13 @@ function corsHeaders() {
   };
 }
 
-// Start mini block generation
 startMiniBlockGeneration();
 
-// Create WebSocket server
 const server = Bun.serve({
   port: 3001,
   async fetch(req, server) {
     const url = new URL(req.url);
 
-    // Handle CORS preflight
     if (req.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -240,7 +289,6 @@ const server = Bun.serve({
     }
 
     if (url.pathname === "/") {
-      // Check if this is a WebSocket upgrade request
       if (req.headers.get("upgrade") === "websocket") {
         const success = server.upgrade(req);
         if (success) {
@@ -249,64 +297,27 @@ const server = Bun.serve({
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
       
-      // Handle HTTP JSON-RPC requests (e.g., realtime_sendRawTransaction)
       if (req.method === "POST") {
         try {
           const body = await req.json() as JsonRpcRequest;
           
           if (body.method === "realtime_sendRawTransaction") {
             const [rawTx] = body.params || [];
+            const result = await processRawTransaction(rawTx, body.id, "HTTP");
             
-            if (!rawTx || typeof rawTx !== "string" || !rawTx.startsWith("0x")) {
+            if (result.success) {
               return Response.json({
                 jsonrpc: "2.0",
                 id: body.id,
-                error: {
-                  code: -32602,
-                  message: "Invalid raw transaction parameter",
-                },
+                result: result.result,
               }, { headers: corsHeaders() });
-            }
-            
-            // Generate mock transaction and receipt
-            const txIndex = pendingTransactions.length;
-            const mockTx = generateMockTransaction(txIndex, currentBlockNumber);
-            const receipt = generateMockReceipt(mockTx, txIndex, currentBlockNumber);
-            
-            // Add to pending queue (will be included in next mini block)
-            pendingTransactions.push({
-              rawTx,
-              transaction: mockTx,
-              receipt,
-            });
-            
-            console.log(`Transaction queued: ${receipt.transactionHash} (will appear in next mini block)`);
-            
-            // Simulate transaction processing delay (10-100ms)
-            // Very rarely (1% chance) simulate timeout for testing
-            const shouldTimeout = Math.random() < 0.01;
-            const delay = shouldTimeout ? 10000 : Math.random() * 90 + 10;
-            
-            await new Promise(resolve => setTimeout(resolve, delay));
-            
-            if (shouldTimeout) {
-              console.log(`Transaction timeout: request ${body.id}`);
+            } else {
               return Response.json({
                 jsonrpc: "2.0",
                 id: body.id,
-                error: {
-                  code: -32000,
-                  message: "realtime transaction expired",
-                },
+                error: result.error,
               }, { headers: corsHeaders() });
             }
-            
-            console.log(`Transaction receipt returned: ${receipt.transactionHash}`);
-            return Response.json({
-              jsonrpc: "2.0",
-              id: body.id,
-              result: receipt,
-            }, { headers: corsHeaders() });
           }
           
           return Response.json({
@@ -361,7 +372,6 @@ const server = Bun.serve({
       }
     },
     close(ws) {
-      // Clean up subscriptions for this WebSocket
       for (const [subId, sub] of subscriptions.entries()) {
         if (sub.ws === ws) {
           subscriptions.delete(subId);
@@ -377,6 +387,7 @@ console.log(`MegaETH Realtime API Mock Server running on port ${server.port}`);
 console.log(`\nWebSocket endpoint: ws://localhost:${server.port}`);
 console.log("  - eth_subscribe (miniBlocks)");
 console.log("  - eth_unsubscribe");
+console.log("  - realtime_sendRawTransaction");
 console.log(`\nHTTP JSON-RPC endpoint: http://localhost:${server.port}`);
 console.log("  - realtime_sendRawTransaction");
 
