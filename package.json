@@ -5,6 +5,7 @@
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun run --watch index.ts",
+    "websocket-dev": "bun run --watch websocket.ts",
     "build": "tsc"
   },
   "devDependencies": {
