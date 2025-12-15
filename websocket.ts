@@ -21,7 +21,54 @@ type Subscription = {
   ws: any;
 };
 
-function generateMockTransaction(index: number, blockNumber: number) {
+type Transaction = {
+  hash: string;
+  nonce: string;
+  blockHash: string;
+  blockNumber: string;
+  transactionIndex: string;
+  from: string;
+  to: string;
+  value: string;
+  gas: string;
+  gasPrice: string;
+  input: string;
+  v: string;
+  r: string;
+  s: string;
+};
+
+type Receipt = {
+  transactionHash: string;
+  transactionIndex: string;
+  blockHash: string;
+  blockNumber: string;
+  from: string;
+  to: string;
+  cumulativeGasUsed: string;
+  gasUsed: string;
+  contractAddress: null | string;
+  logs: any[];
+  logsBloom: string;
+  status: string;
+  effectiveGasPrice: string;
+  type: string;
+};
+
+type MiniBlock = {
+  payload_id: string;
+  block_number: number;
+  index: number;
+  tx_offset: number;
+  log_offset: number;
+  gas_offset: number;
+  timestamp: number;
+  gas_used: number;
+  transactions: Transaction[];
+  receipts: Receipt[];
+};
+
+function generateMockTransaction(index: number, blockNumber: number): Transaction {
   const txHash = `0x${Math.random().toString(16).slice(2).padStart(64, "0")}`;
   const from = `0x${Math.random().toString(16).slice(2).padStart(40, "0")}`;
   const to = `0x${Math.random().toString(16).slice(2).padStart(40, "0")}`;
@@ -44,7 +91,7 @@ function generateMockTransaction(index: number, blockNumber: number) {
   };
 }
 
-function generateMockReceipt(transaction: any, index: number, blockNumber: number) {
+function generateMockReceipt(transaction: Transaction, index: number, blockNumber: number): Receipt {
   return {
     transactionHash: transaction.hash,
     transactionIndex: transaction.transactionIndex,
@@ -63,9 +110,9 @@ function generateMockReceipt(transaction: any, index: number, blockNumber: numbe
   };
 }
 
-function generateMiniBlock(blockNumber: number, index: number) {
-  let transactions: ReturnType<typeof generateMockTransaction>[] = [];
-  let receipts: ReturnType<typeof generateMockReceipt>[] = [];
+function generateMiniBlock(blockNumber: number, index: number): MiniBlock {
+  let transactions: Transaction[] = [];
+  let receipts: Receipt[] = [];
   
   // First, include ALL pending transactions from realtime_sendRawTransaction
   if (pendingTransactions.length > 0) {
@@ -113,8 +160,8 @@ let miniBlockIndex = 0;
 // Pending transactions queue (from realtime_sendRawTransaction)
 type PendingTransaction = {
   rawTx: string;
-  transaction: ReturnType<typeof generateMockTransaction>;
-  receipt: ReturnType<typeof generateMockReceipt>;
+  transaction: Transaction;
+  receipt: Receipt;
 };
 const pendingTransactions: PendingTransaction[] = [];
 
@@ -173,10 +220,7 @@ function startMiniBlockGeneration() {
             JSON.stringify({
               jsonrpc: "2.0",
               method: "eth_subscription",
-              params: {
-                subscription: subId,
-                result: miniBlock,
-              },
+              result: miniBlock,
             })
           );
         } catch (error) {
