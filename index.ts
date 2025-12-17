@@ -1,5 +1,15 @@
 import { createClient } from "@clickhouse/client";
 
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import * as schema from "./db/schema";
+
+const connectionString = process.env.PLANETSCALE_DATABASE_URL!;
+
+const postgresClient = postgres(connectionString, { prepare: false });
+
+export const postgresDb = drizzle(postgresClient, { schema });
+
 type TransferData = {
   time_bucket: string;
   total_transfers: string;
@@ -13,11 +23,11 @@ type TransferData = {
   median_amount: number;
 };
 
-const client = createClient({
+const clickhouseClient = createClient({
   url: process.env.CLICKHOUSE_URL!,
   username: process.env.CLICKHOUSE_USERNAME!,
   password: process.env.CLICKHOUSE_PASSWORD!,
-  clickhouse_settings: { use_query_cache: 0 },  
+  clickhouse_settings: { use_query_cache: 0 },
 });
 
 // Helper to add CORS headers to any response
@@ -135,8 +145,14 @@ const server: Bun.Server = Bun.serve({
               quantileMerge(0.5)(median_amount) as median_amount
             FROM "${table}"
             WHERE 1=1
-            ${fromTimestamp ? `AND time_bucket >= toDateTime(${fromTimestamp})` : ""}
-            ${toTimestamp ? `AND time_bucket <= toDateTime(${toTimestamp})` : ""}
+            ${
+              fromTimestamp
+                ? `AND time_bucket >= toDateTime(${fromTimestamp})`
+                : ""
+            }
+            ${
+              toTimestamp ? `AND time_bucket <= toDateTime(${toTimestamp})` : ""
+            }
             GROUP BY time_bucket
             ${toBlock ? `HAVING last_block_number <= ${+toBlock}` : ""}
             ORDER BY last_block_number DESC
@@ -160,8 +176,14 @@ const server: Bun.Server = Bun.serve({
               quantileMerge(0.5)(median_amount) as median_amount
             FROM "${table}"
             WHERE 1=1
-            ${fromTimestamp ? `AND time_bucket >= toDateTime(${fromTimestamp})` : ""}
-            ${toTimestamp ? `AND time_bucket <= toDateTime(${toTimestamp})` : ""}
+            ${
+              fromTimestamp
+                ? `AND time_bucket >= toDateTime(${fromTimestamp})`
+                : ""
+            }
+            ${
+              toTimestamp ? `AND time_bucket <= toDateTime(${toTimestamp})` : ""
+            }
             GROUP BY time_bucket
             ${toBlock ? `HAVING last_block_number >= ${+toBlock}` : ""}
             ORDER BY last_block_number ASC
@@ -171,38 +193,49 @@ const server: Bun.Server = Bun.serve({
           }
         `;
 
-
         const maxRetries = 10; // Maximum number of retry attempts
         const retryDelay = 250; // Delay between retries in milliseconds
         let attempt = 0;
-        let finalResults: { data: TransferData[]; rows: number } = { data: [], rows: 0 };
+        let finalResults: { data: TransferData[]; rows: number } = {
+          data: [],
+          rows: 0,
+        };
 
         while (attempt < maxRetries) {
           attempt++;
           console.log(`Query attempt ${attempt}/${maxRetries}`);
 
           console.time("clickhouse_query");
-          const rows = await client.query({ query });
+          const rows = await clickhouseClient.query({ query });
           console.timeEnd("clickhouse_query");
 
           const result = await rows.json();
-          finalResults = { data: result.data as TransferData[], rows: result.rows as number };
+          finalResults = {
+            data: result.data as TransferData[],
+            rows: result.rows as number,
+          };
 
           const hasData = result.rows && result.rows > 0;
 
           let blockMatches = true;
-          if(toBlock) {
-            if(!hasData || +finalResults.data[0]!.last_block_number < +toBlock) 
+          if (toBlock) {
+            if (!hasData || +finalResults.data[0]!.last_block_number < +toBlock)
               blockMatches = false;
           }
-          
+
           if (hasData && blockMatches) {
-            console.timeLog("API_request", `Query succeeded on attempt ${attempt}`);
+            console.timeLog(
+              "API_request",
+              `Query succeeded on attempt ${attempt}`
+            );
             break;
           }
 
           if (attempt >= maxRetries) {
-            console.timeLog("API_request", `Max retries reached (${maxRetries})`);
+            console.timeLog(
+              "API_request",
+              `Max retries reached (${maxRetries})`
+            );
             finalResults = { data: [], rows: 0 };
             break;
           }
@@ -255,11 +288,27 @@ const server: Bun.Server = Bun.serve({
       }
     }
 
+    if (req.method === "GET" && url.pathname === "/postgres/transfers") {
+      const allLogs = await postgresDb.select().from(schema.wbtcSql).limit(10);
+
+      const count = allLogs.length;
+      const result = allLogs.map((log) => ({
+        ...log,
+        blockNumber: log.blockNumber?.toString(),
+        transactionIndex: log.transactionIndex?.toString(),
+        logIndex: log.logIndex?.toString(),
+        blockTimestamp: log.blockTimestamp?.toString(),
+      }));
+
+      return cors(new Response(JSON.stringify({ count, result }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+
     return cors(new Response("Not Found", { status: 404 }));
   },
 });
 
 console.log(`Server running on http://localhost:${server.port}`);
 console.log(`Query: http://localhost:${server.port}/transfers`);
+console.log(`Query: http://localhost:${server.port}/postgres/transfers`);
 console.log(`Health: http://localhost:${server.port}/health`);
 console.log(`WebSocket: ws://localhost:${server.port}`);
