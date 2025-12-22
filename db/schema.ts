@@ -19,3 +19,20 @@ export const wbtcSql = pgTable("wbtc_sql", {
   
   blockTimestamp: bigint("block_timestamp", { mode: "bigint" }),
 });
+
+export const arbitrumOneCleanSql2 = pgTable("arbitrum_one_clean_sql_2", {
+  id: text("id").primaryKey().notNull(),
+  
+  blockNumber: bigint("block_number", { mode: "bigint" }),
+  transactionHash: text("transaction_hash"),
+  
+  // Array of text values for event parameters
+  eventParams: text("event_params").array(),
+  eventSignature: text("event_signature"),
+  
+  // Using quotes for reserved SQL keywords
+  from: text("from"),
+  to: text("to"),
+  
+  value: text("value"),
+});

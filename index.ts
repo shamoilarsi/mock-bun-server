@@ -3,6 +3,7 @@ import { createClient } from "@clickhouse/client";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./db/schema";
+import { eq } from "drizzle-orm";
 
 const connectionString = process.env.PLANETSCALE_DATABASE_URL!;
 
@@ -289,15 +290,12 @@ const server: Bun.Server = Bun.serve({
     }
 
     if (req.method === "GET" && url.pathname === "/postgres/transfers") {
-      const allLogs = await postgresDb.select().from(schema.wbtcSql).limit(10);
+      const allLogs = await postgresDb.select().from(schema.arbitrumOneCleanSql2).where(eq(schema.arbitrumOneCleanSql2.from, "0x0e4831319a50228b9e450861297ab92dee15b44f"));
 
       const count = allLogs.length;
       const result = allLogs.map((log) => ({
         ...log,
         blockNumber: log.blockNumber?.toString(),
-        transactionIndex: log.transactionIndex?.toString(),
-        logIndex: log.logIndex?.toString(),
-        blockTimestamp: log.blockTimestamp?.toString(),
       }));
 
       return cors(new Response(JSON.stringify({ count, result }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -311,4 +309,3 @@ console.log(`Server running on http://localhost:${server.port}`);
 console.log(`Query: http://localhost:${server.port}/transfers`);
 console.log(`Query: http://localhost:${server.port}/postgres/transfers`);
 console.log(`Health: http://localhost:${server.port}/health`);
-console.log(`WebSocket: ws://localhost:${server.port}`);
